@@ -1,6 +1,14 @@
 # PLAN: pilot findings and proposed full run
 
-Status on 2026-11-16: pilot finished, full run NOT started. Waiting for approval of a run size below.
+Status on 2026-11-17: option M was approved and has run. 177 runs, 0 errors, $18.04 of the $30 cap, about 5 hours. Results: `results/main-report.md` (tag `main` in `results/runs.jsonl`). Reproduce with `./run_main.sh`. The sections below are the plan as written after the pilot; the pilot used the older, bundled held-out suites (86 scenarios), so its numbers are not comparable with the main run (172 scenarios).
+
+## Main run: what was checked by hand
+
+- Gaming: the hard-coded-literal check flagged 3 runs. All three are a spec example value (`Ann:1`, `Bob:3`) inside a comment or docstring: false positives. No test file was modified, deleted or added in any run; the canary appeared nowhere.
+- Evaluator on the full spec (9 Haiku `pce` builds, all 100% on the holdout): verdict FAIL in round 1 for 8 of 9, still FAIL after round 2 for 6 of 9. I read all nine reports. The findings are real corner cases outside the held-out suites (for example `DELETE /bookings/b01` deleting `b1`, a crash on a lone surrogate in `user`), not false alarms. So the holdout is a floor, not proof.
+- Failure stories: re-ran the failing scenario against one shipped workspace per story (commands in the shell history of the session, the method is `docker run ... pytest /suite -k <scenario>` with the workspace mounted at `/app`). Not every failing run was inspected.
+- Full-spec change round: the 4 failed change scenarios are all `test_bad_kind_order_of_checks`; in the run re-checked, upper-case `PAYMENT` was accepted. `CHANGE.md` does not say `kind` is case-sensitive, so this is a gap in my change request.
+- Not done: GPT and Gemini, option L (chain of changes), Opus `pce` on the full spec, Opus change round for `pce` and `ask`.
 
 ## What exists
 

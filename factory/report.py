@@ -26,8 +26,15 @@ def agg(runs, keyf, change):
         row = list(key) + [len(rs), f"{s('public', 'passed')}/{s('public', 'total')} ({pct(s('public', 'passed'), s('public', 'total'))})",
                            f"{s('holdout', 'passed')}/{s('holdout', 'total')} ({pct(s('holdout', 'passed'), s('holdout', 'total'))})",
                            f"{100 * (s('public', 'passed') / s('public', 'total') - s('holdout', 'passed') / s('holdout', 'total')):.0f} pts"]
+        rates = sorted(100 * r["grade"]["holdout"]["passed"] / r["grade"]["holdout"]["total"] for r in rs)
+        row.append(f"{rates[0]:.0f}-{rates[-1]:.0f}%")
         if change:
-            row += [f"{s('regression', 'passed')}/{s('regression', 'total')}", f"{s('change', 'passed')}/{s('change', 'total')}"]
+            kept, base = sum(r["survival"]["kept"] for r in rs), sum(r["survival"]["base"] for r in rs)
+            row += [f"{kept}/{base} ({100 * kept / base:.1f}%)", sum(1 for r in rs if r["survival"]["broken"]),
+                    f"{s('change', 'passed')}/{s('change', 'total')} ({pct(s('change', 'passed'), s('change', 'total'))})"]
+        else:
+            qs = [r["factory"]["questions"] for r in rs if r["factory"].get("questions") is not None]
+            row.append(f"{sum(qs) / len(qs):.1f}" if qs else "-")
         row += [sum(1 for r in rs if r["grade"]["holdout"]["passed"] == r["grade"]["holdout"]["total"]),
                 sum(1 for r in rs if r["gaming"]["gamed"]),
                 f"${sum(r['usage']['cost_usd'] for r in rs) / len(rs):.3f}",
@@ -53,6 +60,8 @@ def main():
     ap.add_argument("--tag", required=True)
     a = ap.parse_args()
     allr = [r for r in load_runs() if r["tag"] == a.tag]
+    for r in allr:
+        r.setdefault("survival", {"kept": 0, "base": 0, "broken": []})
     runs = [r for r in allr if r["error"] is None]
     print(f"# Report for tag `{a.tag}`\n\n{len(runs)} finished runs, {len(allr) - len(runs)} errored, "
           f"total model spend ${sum(r['usage']['cost_usd'] for r in allr):.2f}.\n")
@@ -61,7 +70,8 @@ def main():
         rs = [r for r in runs if r["round"] == rnd]
         if not rs:
             continue
-        mid = ["public", "holdout", "gap"] + (["regression", "change"] if rnd == 2 else [])
+        mid = ["public", "holdout", "gap", "holdout range over runs"] + (
+            ["survival (previously passing scenarios still passing)", "runs that broke something", "change scenarios"] if rnd == 2 else ["questions asked"])
         print(f"## {title}\n\nBy model and design:\n")
         print(table(agg(rs, lambda r: (r.get("spec_level", "full"), r["model"], r["design"]), rnd == 2), ["spec level", "model", "design", "runs"] + mid + tail))
         if rnd == 1:
@@ -69,11 +79,13 @@ def main():
             print(class_table(rs))
         print("\nBy spec, model and design:\n")
         print(table(agg(rs, lambda r: (r.get("spec_level", "full"), r["spec"], r["model"], r["design"]), rnd == 2), ["spec level", "spec", "model", "design", "runs"] + mid + tail))
-        print("\nFailed held-out scenarios per run:\n")
+        print("\nFailed held-out scenarios per run (round 2: scenarios the change broke, and failed change scenarios):\n")
         for r in sorted(rs, key=lambda r: (r.get("spec_level", "full"), r["spec"], r["model"], r["design"], r["trial"])):
             failed = []
-            for suite in ("holdout", "regression", "change"):
-                failed += [f"{suite}:{n}" for n in r["grade"].get(suite, {}).get("failed", [])]
+            if rnd == 1:
+                failed = list(r["grade"]["holdout"]["failed"])
+            else:
+                failed = [f"BROKEN:{n}" for n in r["survival"]["broken"]] + [f"change:{n}" for n in r["grade"]["change"]["failed"]]
             print(f"- `{r['run_id']}`: " + (", ".join(failed) if failed else "none"))
         print()
     gamed = [r for r in runs if r["gaming"]["gamed"] or r["gaming"]["canary_in_workspace"] or r["gaming"]["canary_in_transcript"]]
