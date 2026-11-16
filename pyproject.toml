@@ -1,0 +1,9 @@
+[project]
+name = "dark-factory-lab"
+version = "0.1.0"
+description = "A small dark factory: agents take specs to shipped code, graded on held-out scenarios"
+requires-python = ">=3.12,<3.14"
+dependencies = ["anthropic>=1.0", "python-dotenv>=1"]
+
+[tool.uv]
+package = false
