@@ -46,7 +46,7 @@ def prepare_workspace(run_id, spec, parent=None, level="full"):
     return ws
 
 
-def one_run(tag, spec, design, model, trial, rnd, parent, backend=None, level="full", run_cap=None):
+def one_run(tag, spec, design, model, trial, rnd, parent, backend=None, level="full", run_cap=None, oracle=None):
     run_id = f"{dt.datetime.now():%Y%m%d-%H%M%S}-{spec}-{design}-{model.split('-')[1] if '-' in model else model}-{level}-r{rnd}-t{trial}"
     raw = config.RAW / run_id
     raw.mkdir(parents=True, exist_ok=True)
@@ -59,10 +59,13 @@ def one_run(tag, spec, design, model, trial, rnd, parent, backend=None, level="f
     try:
         with Sandbox(ws) as sb:
             ctx = SimpleNamespace(backend=backend or llm.backend_for(model), meter=meter, sandbox=sb, transcript=transcript,
-                                  change=rnd == 2, cost_cap=run_cap or config.RUN_COST_CAP.get(model, 1.0))
+                                  change=rnd == 2, cost_cap=run_cap or config.RUN_COST_CAP.get(model, 1.0),
+                                  oracle=oracle or (llm.backend_for(config.ORACLE_MODEL) if design == "ask" else None),
+                                  full_spec=(config.SPECS / spec / "SPEC.md").read_text())
             out = DESIGNS[design](ctx)
         rec["factory"] = {"iterations": out["iterations"], "eval_rounds": out.get("eval_rounds"),
                           "eval_verdicts": out.get("eval_verdicts"), "evaluator_touched_src": out.get("evaluator_touched_src"),
+                          "questions": out.get("questions"),
                           "stages": {k: {x: v[x] for x in ("turns", "tool_calls", "stopped_by", "last_pytest")}
                                      for k, v in out["stages"].items()}}
     except Exception as e:  # API failure, Docker failure: keep the record, do not count the cell as done
@@ -83,6 +86,12 @@ def one_run(tag, spec, design, model, trial, rnd, parent, backend=None, level="f
         rec["grade_s"] = round(time.time() - t1, 1)
         g = rec["grade"]
         rec["gap"] = round(g["public"]["rate"] - g["holdout"]["rate"], 4)
+        if rnd == 2:   # survival: of the held-out scenarios the parent codebase passed, how many still pass after the change
+            prec = next(r for r in load_runs() if r["run_id"] == parent)
+            base = [n for n in prec["grade"]["holdout"]["names"] if n not in prec["grade"]["holdout"]["failed"]
+                    and n in g["regression"]["names"]]
+            kept = [n for n in base if n not in g["regression"]["failed"]]
+            rec["survival"] = {"kept": len(kept), "base": len(base), "broken": sorted(set(base) - set(kept))}
     with open(config.RUNS, "a") as f:
         f.write(json.dumps(rec) + "\n")
     return rec
@@ -95,8 +104,11 @@ def summary_line(r):
     extra = ""
     if "by_class" in g["holdout"]:
         extra = " [" + " ".join(f"{k} {v['passed']}/{v['total']}" for k, v in sorted(g["holdout"]["by_class"].items(), reverse=True)) + "]"
+    if r["factory"].get("questions") is not None:
+        extra += f" questions={r['factory']['questions']}"
     if r["round"] == 2:
-        extra = f" regression {g['regression']['passed']}/{g['regression']['total']} change {g['change']['passed']}/{g['change']['total']}"
+        extra += f" survival {r['survival']['kept']}/{r['survival']['base']}"
+        extra += f" regression {g['regression']['passed']}/{g['regression']['total']} change {g['change']['passed']}/{g['change']['total']}"
     return (f"  public {g['public']['passed']}/{g['public']['total']} holdout {g['holdout']['passed']}/{g['holdout']['total']}"
             f"{extra} gamed={r['gaming']['gamed']} ${r['usage']['cost_usd']:.3f} {r['elapsed_s']:.0f}s iters={r['factory']['iterations']}")
 
@@ -115,8 +127,6 @@ def main():
     ap.add_argument("--run-cap", type=float, help="per-run cost cap in USD (default: per model, see config)")
     ap.add_argument("--resume", action="store_true", help="skip cells that already have a finished record")
     a = ap.parse_args()
-    if a.change and a.spec_level == "brief":
-        ap.error("the change round is only defined for the full spec")
     models = [config.MODEL_ALIASES.get(m, m) for m in a.models.split(",")]
     done = {cell_key(r): r for r in load_runs() if r["error"] is None} if a.resume else {}
     cells = [(s, d, m, t) for t in range(1, a.trials + 1) for m in models for s in a.specs.split(",") for d in a.designs.split(",")]

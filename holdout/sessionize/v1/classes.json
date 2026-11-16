@@ -13,8 +13,6 @@
  "test_dedupe_tie_keeps_first_in_file": "arbitrary",
  "test_dedupe_is_exact_string_and_ignores_rejected": "implied",
  "test_reject_reasons_and_order_of_checks": "arbitrary",
- "test_bad_timestamps": "implied",
- "test_bad_amounts": "implied",
  "test_amount_ignored_for_non_purchase": "arbitrary",
  "test_revenue_exact_decimal": "implied",
  "test_session_across_midnight_counts_on_start_date": "arbitrary",

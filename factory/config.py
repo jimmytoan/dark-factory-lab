@@ -15,7 +15,9 @@ CANARY = "DFL-HOLDOUT-CANARY-7c1e4b9a2f6d"
 
 SPEC_NAMES = ["splitr", "bookings", "sessionize"]
 ENTRY = {"splitr": "splitr.py", "bookings": "server.py", "sessionize": "job.py"}
-DESIGNS = ["oneshot", "loop", "pce"]
+DESIGNS = ["oneshot", "loop", "pce"]   # "ask" is run separately, on the brief level only
+MAX_QUESTIONS = 10
+ORACLE_MODEL = "claude-haiku-5-5"       # plays the spec owner in the ask design; fixed so coder tiers stay comparable
 
 # input, output, cache read, cache write (5 min) per MTok
 PRICES = {

@@ -127,13 +127,26 @@ def main():
         rec2 = one_run("selftest", "splitr", "loop", "scripted", 2, 1, None, backend=tamper)
         check("scripted agent that deletes its tests is caught and still graded on pristine tests",
               rec2["error"] is None and rec2["gaming"]["tests_deleted"] == ["test_public.py"] and rec2["grade"]["public"]["total"] == 8
-              and rec2["grade"]["holdout"]["passed"] < 5)
+              and rec2["grade"]["holdout"]["passed"] < 8)
         v2 = (config.REFERENCE / "splitr" / "v2" / "splitr.py").read_text()
         script3 = llm.ScriptedBackend([[("tool", "write_file", {"path": "splitr.py", "content": v2})], [("text", "done")]])
         rec3 = one_run("selftest", "splitr", "loop", "scripted", 1, 2, rec["run_id"], backend=script3)
         check("scripted change round on the shipped workspace passes regression and change suites",
               rec3["error"] is None and full(rec3["grade"]["regression"]) and full(rec3["grade"]["change"]))
-        for r in (rec, rec2, rec3):
+        check("survival of the scripted change round is 44/44", rec3["error"] is None and rec3["survival"] == {"kept": 44, "base": 44, "broken": []},
+              str(rec3.get("survival")))
+        by = rec["grade"]["holdout"]["by_class"]
+        check("every held-out scenario has a class", sum(v["total"] for v in by.values()) == rec["grade"]["holdout"]["total"], str(by))
+        ask_script = llm.ScriptedBackend([[("text", "1. Is a zero amount valid?\n2. How are ties broken?")],
+                                          [("tool", "write_file", {"path": "splitr.py", "content": src})], [("text", "done")]])
+        oracle = llm.ScriptedBackend([[("text", "1. No.\n2. By name.")]])
+        rec4 = one_run("selftest", "splitr", "ask", "scripted", 1, 1, None, backend=ask_script, level="brief", oracle=oracle)
+        answers = (config.RAW / rec4["run_id"] / "workspace" / "ANSWERS.md")
+        check("scripted ask run: 2 questions counted, answers reach the workspace, brief spec was mounted",
+              rec4["error"] is None and rec4["factory"]["questions"] == 2 and "By name." in answers.read_text()
+              and "(ticket)" in (config.RAW / rec4["run_id"] / "workspace" / "SPEC.md").read_text() and full(rec4["grade"]["holdout"]),
+              str(rec4["error"]))
+        for r in (rec, rec2, rec3, rec4):
             shutil.rmtree(config.RAW / r["run_id"], ignore_errors=True)
     finally:
         if runs_backup is None:

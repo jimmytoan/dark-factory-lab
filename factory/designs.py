@@ -1,5 +1,5 @@
 """The three factory designs. Each takes a prepared workspace (SPEC.md, tests/, maybe existing code) to shipped code."""
-import subprocess
+import re
 
 from . import config
 from .agent import agent_loop
@@ -123,4 +123,38 @@ def pce(ctx):
             "eval_verdicts": verdicts, "evaluator_touched_src": evaluator_touched_src}
 
 
-DESIGNS = {"oneshot": oneshot, "loop": loop, "pce": pce}
+ASKER = f"""{FACTORY}
+
+You are the analyst. You do not write code. Before the coder starts, you may put questions to the customer who wrote the spec. \
+Read the spec and the examples and find what a correct implementation needs to know but the spec does not settle: ambiguous rules, \
+missing edge cases, unstated ordering or tie-breaks, input variants. Ask at most {config.MAX_QUESTIONS} questions. Each must be \
+specific and answerable in one or two sentences; do not ask for the spec to be rewritten. Reply with a numbered list of questions and nothing else."""
+ORACLE = """You are the customer who owns this product. A developer is asking you questions about what you want. \
+Below is everything you know about what the product must do. Answer each numbered question in one or two sentences, using only \
+this knowledge. Answer only what is asked and do not volunteer other rules. If your knowledge does not settle a question, \
+answer "No preference." Reply with the numbered answers and nothing else.
+
+===== what you know =====
+"""
+
+
+def ask(ctx):
+    """Like loop, but first an analyst may ask the spec owner up to N questions. The owner is a model holding the full spec."""
+    stages = {}
+    q_msgs = [{"role": "user", "content": f"{_material(ctx.sandbox, ctx.change)}\n\nWrite your questions for the customer."}]
+    stages["asker"] = agent_loop(ctx.backend, ctx.meter, "asker", ctx.sandbox, ASKER, q_msgs, [], 1, ctx.transcript, ctx.cost_cap)
+    questions = stages["asker"]["final_text"]
+    n_questions = len(re.findall(r"(?m)^\s*\d+[.)]", questions))
+    o_msgs = [{"role": "user", "content": f"Questions from the developer:\n\n{questions}"}]
+    stages["oracle"] = agent_loop(ctx.oracle, ctx.meter, "oracle", ctx.sandbox, ORACLE + ctx.full_spec, o_msgs, [], 1,
+                                  ctx.transcript, ctx.cost_cap)
+    ctx.sandbox.write_file("ANSWERS.md", "# Questions to the customer, and the customer's answers\n\n## Questions\n\n"
+                           f"{questions}\n\n## Answers\n\n{stages['oracle']['final_text']}\n")
+    kickoff = _coder_kickoff(ctx) + " ANSWERS.md holds the customer's answers to questions an analyst asked; they are part of the spec."
+    stages["coder"] = agent_loop(ctx.backend, ctx.meter, "coder", ctx.sandbox, CODER_CHANGE if ctx.change else CODER_BUILD,
+                                 [{"role": "user", "content": kickoff}], ["write_file", "read_file", "list_files", "run"],
+                                 config.MAX_TURNS["coder"], ctx.transcript, ctx.cost_cap)
+    return {"stages": stages, "iterations": sum(s["turns"] for s in stages.values()), "questions": n_questions}
+
+
+DESIGNS = {"oneshot": oneshot, "loop": loop, "pce": pce, "ask": ask}

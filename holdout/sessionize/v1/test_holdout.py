@@ -1,5 +1,6 @@
 # DFL-HOLDOUT-CANARY-7c1e4b9a2f6d — held-out scenarios for sessionize v1. Never mounted into a coder sandbox.
 import json
+import pytest
 from helpers import ev, run_job, pick
 
 
@@ -105,18 +106,16 @@ def test_reject_reasons_and_order_of_checks():
     assert r.daily["rejected"] == 9 and len(r.sessions) == 1
 
 
-def test_bad_timestamps():
-    bad = ["2026-03-01T09:00:00", "2026-03-01 09:00:00Z", "2026-03-01T09:00Z", "2026-02-30T09:00:00Z",
-           "2026-03-01T25:00:00Z", "2026-03-01", "1772355600", "2026-03-01T09:00:00+0700x"]
-    r = run_job([ev(f"e{i}", "ann", t) for i, t in enumerate(bad)])
-    assert [x["reason"] for x in r.rejects] == ["bad_ts"] * len(bad)
-    assert r.sessions == []
+@pytest.mark.parametrize("t", [pytest.param("2026-03-01T09:00:00", id="stated:no_offset"), pytest.param("2026-03-01 09:00:00Z", id="arbitrary:space_separator"), pytest.param("2026-03-01T09:00Z", id="arbitrary:no_seconds"), pytest.param("2026-02-30T09:00:00Z", id="implied:feb_30"), pytest.param("2026-03-01T25:00:00Z", id="implied:hour_25"), pytest.param("2026-03-01", id="implied:date_only"), pytest.param("1772355600", id="implied:epoch"), pytest.param("2026-03-01T09:00:00+0700x", id="implied:junk_offset")])
+def test_bad_timestamp(t):
+    r = run_job([ev("e1", "ann", t)])
+    assert r.rejects == [{"line": 1, "reason": "bad_ts"}] and r.sessions == []
 
 
-def test_bad_amounts():
-    bad = ["-1", "1.999", "abc", "", "1,5", "1e3"]
-    r = run_job([ev(f"e{i}", "ann", "09:00:00", "purchase", amount=a) for i, a in enumerate(bad)])
-    assert [x["reason"] for x in r.rejects] == ["bad_amount"] * len(bad)
+@pytest.mark.parametrize("a", [pytest.param("-1", id="implied:negative"), pytest.param("1.999", id="arbitrary:three_decimals"), pytest.param("abc", id="implied:text"), pytest.param("", id="implied:empty"), pytest.param("1,5", id="implied:comma"), pytest.param("1e3", id="arbitrary:exponent")])
+def test_bad_amount(a):
+    r = run_job([ev("e1", "ann", "09:00:00", "purchase", amount=a)])
+    assert r.rejects == [{"line": 1, "reason": "bad_amount"}]
 
 
 def test_amount_ignored_for_non_purchase():
