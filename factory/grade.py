@@ -30,13 +30,14 @@ def run_suite(app_dir, suite_files, deselect=()):
         subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     except subprocess.TimeoutExpired:
         error = "suite timed out"
-    res = {"passed": 0, "total": 0, "failed": [], "error": error}
+    res = {"passed": 0, "total": 0, "failed": [], "names": [], "error": error}
     junit = out / "junit.xml"
     if junit.exists():
         for case in ET.parse(junit).getroot().iter("testcase"):
             if case.find("skipped") is not None:
                 continue
             res["total"] += 1
+            res["names"].append(case.get("name"))
             if case.find("failure") is None and case.find("error") is None:
                 res["passed"] += 1
             else:
@@ -47,14 +48,32 @@ def run_suite(app_dir, suite_files, deselect=()):
     return res
 
 
+_TOTALS = {}
+
+
 def expected_total(suite_files, deselect=()):
-    """Number of tests in a suite, counted with pytest --collect-only (does not need the app)."""
-    names = set()
-    for f in suite_files:
-        for line in Path(f).read_text().splitlines():
-            if line.startswith("def test_"):
-                names.add(line[4:line.index("(")])
-    return len([n for n in names if n not in deselect])
+    """Number of scenarios in a suite, counted once with pytest --collect-only (does not need the app)."""
+    key = (tuple(str(f) for f in suite_files), tuple(deselect))
+    if key not in _TOTALS:
+        work = config.RUNTIME / "grade" / uuid.uuid4().hex[:10]
+        work.mkdir(parents=True)
+        for f in suite_files:
+            shutil.copy(f, work / Path(f).name)
+        cmd = ["docker", "run", "--rm", "--network", "none", "-v", f"{work}:/suite:ro", "-w", "/suite", config.IMAGE,
+               "python", "-m", "pytest", "/suite", "--collect-only", "-q", "-p", "no:cacheprovider"]
+        if deselect:
+            cmd += ["-k", "not (" + " or ".join(deselect) + ")"]
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=300).stdout
+        _TOTALS[key] = sum(1 for line in out.splitlines() if "::test_" in line)
+        shutil.rmtree(work, ignore_errors=True)
+    return _TOTALS[key]
+
+
+def scenario_class(name, classes):
+    """Parametrized scenarios carry their class in the id: test_x[implied:foo]. Others are listed in classes.json."""
+    if "[" in name:
+        return name[name.index("[") + 1:].split(":")[0]
+    return classes[name]
 
 
 def _finish(res, files, deselect=()):
@@ -76,11 +95,11 @@ def grade(spec, app_dir, change=False):
         hf = [hold / "helpers.py", hold / "test_holdout.py"]
         out["holdout"] = _finish(run_suite(app_dir, hf), hf)
         classes = json.loads((hold / "classes.json").read_text())
-        by = {}
-        for name, cls in classes.items():
-            b = by.setdefault(cls, {"passed": 0, "total": 0})
+        by = {c: {"passed": 0, "total": 0} for c in ("stated", "implied", "arbitrary")}
+        for name in out["holdout"].get("names", []):
+            b = by[scenario_class(name, classes)]
             b["total"] += 1
-            b["passed"] += name not in out["holdout"]["failed"] and out["holdout"]["error"] is None
+            b["passed"] += name not in out["holdout"]["failed"]
         out["holdout"]["by_class"] = by
         return out
     v2 = config.HOLDOUT / spec / "v2"

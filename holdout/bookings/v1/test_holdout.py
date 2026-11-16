@@ -1,4 +1,5 @@
 # DFL-HOLDOUT-CANARY-7c1e4b9a2f6d — held-out scenarios for bookings v1. Never mounted into a coder sandbox.
+import pytest
 from helpers import api, code, ts  # noqa: F401
 
 
@@ -16,12 +17,13 @@ def test_room_name_trim_and_duplicate_ignoring_case(api):
     assert s == 409 and code(b) == "room_exists"
 
 
-def test_room_validation_cases(api):
-    for body in ({"name": "A"}, {"capacity": 3}, {"name": "A", "capacity": 0}, {"name": "A", "capacity": 501},
-                 {"name": "A", "capacity": "8"}, {"name": "A", "capacity": True}, {"name": "A", "capacity": 2.5},
-                 {"name": 7, "capacity": 2}, {"name": "x" * 51, "capacity": 2}, {"name": "   ", "capacity": 2}):
-        s, b, _ = api.call("POST", "/rooms", body)
-        assert s == 422 and code(b) == "validation_error", body
+@pytest.mark.parametrize("body", [pytest.param({"name": "A"}, id="implied:no_capacity"), pytest.param({"capacity": 3}, id="implied:no_name"), pytest.param({"name": "A", "capacity": 0}, id="stated:capacity_0"), pytest.param({"name": "A", "capacity": 501}, id="stated:capacity_501"), pytest.param({"name": "A", "capacity": "8"}, id="implied:capacity_string"), pytest.param({"name": "A", "capacity": True}, id="arbitrary:capacity_bool"), pytest.param({"name": "A", "capacity": 2.5}, id="implied:capacity_fraction"), pytest.param({"name": 7, "capacity": 2}, id="implied:name_number"), pytest.param({"name": "x" * 51, "capacity": 2}, id="stated:name_51_chars"), pytest.param({"name": "   ", "capacity": 2}, id="arbitrary:name_blank")])
+def test_room_validation(api, body):
+    s, b, _ = api.call("POST", "/rooms", body)
+    assert s == 422 and code(b) == "validation_error"
+
+
+def test_room_limits_accepted(api):
     assert api.call("POST", "/rooms", {"name": "x" * 50, "capacity": 500})[0] == 201
 
 
@@ -33,20 +35,17 @@ def test_get_room_and_unknown_room(api):
     assert s == 404 and code(b) == "not_found"
 
 
-def test_bad_json_and_non_object(api):
-    for path in ("/rooms", "/bookings"):
-        s, b, _ = api.call("POST", path, raw=b"{not json")
-        assert s == 400 and code(b) == "bad_json", path
-        s, b, _ = api.call("POST", path, raw=b"[1,2]")
-        assert s == 400 and code(b) == "bad_json", path
+@pytest.mark.parametrize("path,raw", [pytest.param("/rooms", b"{not json", id="stated:rooms_invalid"), pytest.param("/bookings", b"{not json", id="stated:bookings_invalid"), pytest.param("/rooms", b"[1,2]", id="arbitrary:rooms_array"), pytest.param("/bookings", b"[1,2]", id="arbitrary:bookings_array")])
+def test_bad_json(api, path, raw):
+    s, b, _ = api.call("POST", path, raw=raw)
+    assert s == 400 and code(b) == "bad_json"
 
 
-def test_method_not_allowed(api):
+@pytest.mark.parametrize("method,path", [pytest.param("DELETE", "/rooms", id="stated:delete_rooms"), pytest.param("PUT", "/rooms/r1", id="stated:put_room"), pytest.param("POST", "/rooms/r1/availability", id="stated:post_availability"), pytest.param("PUT", "/bookings", id="stated:put_bookings"), pytest.param("POST", "/bookings/b1", id="stated:post_booking_id")])
+def test_method_not_allowed(api, method, path):
     api.room()
-    for method, path in (("DELETE", "/rooms"), ("PUT", "/rooms/r1"), ("POST", "/rooms/r1/availability"),
-                         ("PUT", "/bookings"), ("POST", "/bookings/b1")):
-        s, b, _ = api.call(method, path, {} if method in ("PUT", "POST") else None)
-        assert s == 405 and code(b) == "method_not_allowed", (method, path)
+    s, b, _ = api.call(method, path, {} if method in ("PUT", "POST") else None)
+    assert s == 405 and code(b) == "method_not_allowed"
 
 
 def test_error_content_type(api):
@@ -59,31 +58,31 @@ def test_unknown_fields_ignored(api):
     assert s == 201
 
 
-def test_timestamp_format_strict(api):
+@pytest.mark.parametrize("start", [pytest.param("2026-03-02 09:00:00Z", id="arbitrary:space_separator"), pytest.param("2026-03-02T09:00:00", id="arbitrary:no_zone"), pytest.param("2026-03-02T09:00:00+00:00", id="arbitrary:numeric_offset"), pytest.param("2026-03-02T09:00Z", id="arbitrary:no_seconds"), pytest.param("2026-03-02T09:00:00.000Z", id="arbitrary:milliseconds"), pytest.param("2026-02-30T09:00:00Z", id="implied:feb_30"), pytest.param("2026-03-02T24:00:00Z", id="implied:hour_24"), pytest.param(1772442000, id="implied:number")])
+def test_bad_timestamp(api, start):
     api.room()
-    for start in ("2026-03-02 09:00:00Z", "2026-03-02T09:00:00", "2026-03-02T09:00:00+00:00", "2026-03-02T09:00Z",
-                  "2026-03-02T09:00:00.000Z", "2026-02-30T09:00:00Z", "2026-03-02T24:00:00Z", 1772442000):
-        s, b, _ = post_booking(api, start=start)
-        assert s == 422 and code(b) == "validation_error", start
+    s, b, _ = post_booking(api, start=start)
+    assert s == 422 and code(b) == "validation_error"
 
 
-def test_alignment_and_duration(api):
+@pytest.mark.parametrize("a,b_", [pytest.param("09:05", "10:00", id="stated:start_off_quarter"), pytest.param("09:00", "09:50", id="stated:end_off_quarter"), pytest.param("10:00", "09:00", id="implied:end_before_start"), pytest.param("09:00", "09:00", id="implied:zero_length"), pytest.param("2026-03-02T09:00:30Z", "2026-03-02T10:00:00Z", id="stated:seconds_not_zero"), pytest.param("08:00", "16:15", id="stated:longer_than_8h")])
+def test_bad_slot(api, a, b_):
     api.room()
-    bad = [("09:05", "10:00"), ("09:00", "09:50"), ("10:00", "09:00"), ("09:00", "09:00"),
-           ("2026-03-02T09:00:30Z", "2026-03-02T10:00:00Z"), ("08:00", "16:15")]
-    for a, b_ in bad:
-        s, b, _ = post_booking(api, start=ts(a), end=ts(b_))
-        assert s == 422 and code(b) == "validation_error", (a, b_)
+    s, b, _ = post_booking(api, start=ts(a), end=ts(b_))
+    assert s == 422 and code(b) == "validation_error"
+
+
+def test_slot_limits_accepted(api):
+    api.room()
     assert post_booking(api, start=ts("08:00"), end=ts("16:00"))[0] == 201
     assert post_booking(api, start=ts("16:00"), end=ts("16:15"))[0] == 201
 
 
-def test_booking_field_validation(api):
+@pytest.mark.parametrize("over", [pytest.param({"title": "  "}, id="arbitrary:title_blank"), pytest.param({"title": "x" * 101}, id="arbitrary:title_101_chars"), pytest.param({"title": 5}, id="implied:title_number"), pytest.param({"attendees": 0}, id="implied:attendees_0"), pytest.param({"attendees": "2"}, id="implied:attendees_string"), pytest.param({"attendees": True}, id="arbitrary:attendees_bool"), pytest.param({"room_id": 1}, id="implied:room_id_number"), pytest.param({"title": ...}, id="implied:no_title"), pytest.param({"end": ...}, id="implied:no_end"), pytest.param({"room_id": ...}, id="implied:no_room_id")])
+def test_booking_field_validation(api, over):
     api.room()
-    for over in ({"title": "  "}, {"title": "x" * 101}, {"title": 5}, {"attendees": 0}, {"attendees": "2"},
-                 {"attendees": True}, {"room_id": 1}, {"title": ...}, {"end": ...}, {"room_id": ...}):
-        s, b, _ = post_booking(api, **over)
-        assert s == 422 and code(b) == "validation_error", over
+    s, b, _ = post_booking(api, **over)
+    assert s == 422 and code(b) == "validation_error"
 
 
 def test_title_trimmed(api):
@@ -106,12 +105,17 @@ def test_check_order_validation_before_room_before_capacity_before_conflict(api)
     assert s == 422 and code(b) == "over_capacity"
 
 
-def test_overlap_variants(api):
+@pytest.mark.parametrize("a,b_", [pytest.param("09:00", "10:15", id="stated:overlaps_start"), pytest.param("10:45", "12:00", id="stated:overlaps_end"), pytest.param("10:15", "10:45", id="stated:inside"), pytest.param("09:00", "12:00", id="stated:around"), pytest.param("10:00", "11:00", id="stated:same")])
+def test_overlap(api, a, b_):
     r = api.room()
     assert api.book(r, "10:00", "11:00")[0] == 201
-    for a, b_ in (("09:00", "10:15"), ("10:45", "12:00"), ("10:15", "10:45"), ("09:00", "12:00"), ("10:00", "11:00")):
-        s, b, _ = api.book(r, a, b_)
-        assert s == 409 and code(b) == "conflict", (a, b_)
+    s, b, _ = api.book(r, a, b_)
+    assert s == 409 and code(b) == "conflict"
+
+
+def test_back_to_back_both_sides(api):
+    r = api.room()
+    assert api.book(r, "10:00", "11:00")[0] == 201
     assert api.book(r, "09:00", "10:00")[0] == 201
     assert api.book(r, "11:00", "12:00")[0] == 201
 
@@ -231,10 +235,13 @@ def test_list_window_half_open(api):
     assert [x["id"] for x in api.call("GET", q)[1]["bookings"]] == ["b1", "b2"]
 
 
-def test_list_invalid_params(api):
-    for q in ("limit=0", "limit=101", "limit=abc", "limit=2.5", "from=yesterday", "to=2026-03-02", "cursor=%21%21garbage"):
-        s, b, _ = api.call("GET", "/bookings?" + q)
-        assert s == 422 and code(b) == "validation_error", q
+@pytest.mark.parametrize("q", [pytest.param("limit=0", id="stated:limit_0"), pytest.param("limit=101", id="stated:limit_101"), pytest.param("limit=abc", id="implied:limit_text"), pytest.param("limit=2.5", id="implied:limit_fraction"), pytest.param("from=yesterday", id="implied:from_text"), pytest.param("to=2026-03-02", id="arbitrary:to_date_only"), pytest.param("cursor=%21%21garbage", id="implied:cursor_garbage")])
+def test_list_invalid_param(api, q):
+    s, b, _ = api.call("GET", "/bookings?" + q)
+    assert s == 422 and code(b) == "validation_error"
+
+
+def test_list_limit_100_accepted(api):
     assert api.call("GET", "/bookings?limit=100")[0] == 200
 
 
@@ -327,10 +334,13 @@ def test_availability_overnight_booking_clipped(api):
     assert b["free"] == [{"start": ts("08:00"), "end": ts("16:00")}]
 
 
-def test_availability_errors(api):
+@pytest.mark.parametrize("q", [pytest.param("", id="implied:no_date"), pytest.param("?date=", id="implied:empty_date"), pytest.param("?date=2026-02-30", id="implied:feb_30"), pytest.param("?date=02-03-2026", id="implied:day_first"), pytest.param("?date=20260302", id="arbitrary:compact")])
+def test_availability_bad_date(api, q):
     r = api.room()
-    for q in ("", "?date=", "?date=2026-02-30", "?date=02-03-2026", "?date=20260302"):
-        s, b, _ = api.call("GET", f"/rooms/{r}/availability{q}")
-        assert s == 422 and code(b) == "validation_error", q
+    s, b, _ = api.call("GET", f"/rooms/{r}/availability{q}")
+    assert s == 422 and code(b) == "validation_error"
+
+
+def test_availability_unknown_room_before_bad_date(api):
     s, b, _ = api.call("GET", "/rooms/r99/availability?date=bad")
     assert s == 404 and code(b) == "not_found"

@@ -1,5 +1,6 @@
 # DFL-HOLDOUT-CANARY-7c1e4b9a2f6d — held-out scenarios for splitr v1. Never mounted into a coder sandbox.
 import json
+import pytest
 from helpers import run, lines
 
 H = "date,payer,amount,participants,note\n"
@@ -40,20 +41,18 @@ def test_amount_forms():
     assert lines(out) == ["Ann +24.55", "Bob -24.55"]
 
 
-def test_bad_amounts():
-    bad = ["0", "0.00", "-5", "+5", "1,000", "1e2", "5.", ".5", "12.345", ""]
-    led = H + "".join(f'2026-03-01,Ann,"{a}",Bob,\n' for a in bad)
-    code, _, err = run(led, "balances", "{f}")
-    assert code == 2
-    assert lines(err) == [f"line {i}: bad-amount" for i in range(2, 2 + len(bad))]
+@pytest.mark.parametrize("amount", [pytest.param("0", id="arbitrary:zero"), pytest.param("0.00", id="arbitrary:zero_decimals"), pytest.param("-5", id="implied:negative"), pytest.param("+5", id="arbitrary:plus_sign"), pytest.param("1,000", id="arbitrary:thousands"), pytest.param("1e2", id="arbitrary:exponent"), pytest.param("5.", id="arbitrary:trailing_dot"), pytest.param(".5", id="arbitrary:leading_dot"), pytest.param("12.345", id="implied:three_decimals"), pytest.param("", id="implied:empty")])
+def test_bad_amount(amount):
+    code, out, err = run(H + f'2026-03-01,Ann,"{amount}",Bob,\n', "balances", "{f}")
+    assert code == 2 and out == ""
+    assert lines(err) == ["line 2: bad-amount"]
 
 
-def test_bad_participants_forms():
-    bad = ["", "Ann;;Bob", "Ann:0", "Ann:x", "Ann:1.5", "Ann; ann ", "Ann:-1"]
-    led = H + "".join(f"2026-03-01,Ann,5,{p},\n" for p in bad)
-    code, _, err = run(led, "balances", "{f}")
-    assert code == 2
-    assert lines(err) == [f"line {i}: bad-participants" for i in range(2, 2 + len(bad))]
+@pytest.mark.parametrize("parts", [pytest.param("", id="implied:empty"), pytest.param("Ann;;Bob", id="arbitrary:empty_name"), pytest.param("Ann:0", id="implied:weight_zero"), pytest.param("Ann:x", id="implied:weight_text"), pytest.param("Ann:1.5", id="arbitrary:weight_fraction"), pytest.param("Ann; ann ", id="arbitrary:same_person_twice"), pytest.param("Ann:-1", id="implied:weight_negative")])
+def test_bad_participants(parts):
+    code, out, err = run(H + f"2026-03-01,Ann,5,{parts},\n", "balances", "{f}")
+    assert code == 2 and out == ""
+    assert lines(err) == ["line 2: bad-participants"]
 
 
 def test_names_case_insensitive_first_spelling():
@@ -165,11 +164,10 @@ def test_file_not_found():
     assert lines(err) == ["error: cannot read {f}.nope"]
 
 
-def test_usage_errors():
-    for args in (["balances"], ["balances", "{f}", "--format", "xml"], ["balances", "{f}", "--since", "2026-02-30"],
-                 ["balances", "{f}", "--bogus"]):
-        code, out, _ = run(H, *args)
-        assert code == 64 and out == "", args
+@pytest.mark.parametrize("args", [pytest.param(["balances"], id="stated:missing_ledger"), pytest.param(["balances", "{f}", "--format", "xml"], id="stated:bad_format"), pytest.param(["balances", "{f}", "--since", "2026-02-30"], id="implied:bad_since_date"), pytest.param(["balances", "{f}", "--bogus"], id="stated:unknown_option")])
+def test_usage_error(args):
+    code, out, _ = run(H, *args)
+    assert code == 64 and out == ""
 
 
 def test_quoted_fields():

@@ -4,8 +4,6 @@
  "test_line_numbers_count_ignored_lines": "implied",
  "test_multiple_bad_rows_in_order_one_reason_each": "arbitrary",
  "test_amount_forms": "implied",
- "test_bad_amounts": "arbitrary",
- "test_bad_participants_forms": "arbitrary",
  "test_names_case_insensitive_first_spelling": "arbitrary",
  "test_sort_ignores_case": "arbitrary",
  "test_zero_balance_prints_unsigned": "arbitrary",
@@ -22,7 +20,6 @@
  "test_options_before_positionals": "implied",
  "test_missing_header_column": "stated",
  "test_file_not_found": "stated",
- "test_usage_errors": "stated",
  "test_quoted_fields": "implied",
  "test_crlf_line_endings": "implied"
 }
